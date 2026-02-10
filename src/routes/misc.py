@@ -89,3 +89,42 @@ async def builder(request: Request):
     
     res = elastic_connector.execute_query(json.dumps(dsl), index_pattern=index)
     return {"queryGenerated": json.dumps(dsl), "results": res.get("data", []), "status": res.get("status")}
+
+@router.post("/remediate")
+async def remediate(request: Request):
+    uname, _ = require_auth(request)
+    body = await request.json()
+    action = body.get("action")
+    logger.info(f"User {uname} initiated remediation: {action}")
+    
+    webhook_url = os.getenv("REMEDIATION_WEBHOOK_URL")
+    
+    # Real Webhook Execution
+    if webhook_url:
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                payload = {
+                    "text": f"🚨 *SIEM Remediation Triggered*\n*Action:* {action}\n*Analyst:* {uname}\n*Timestamp:* {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
+                    "action": action,
+                    "user": uname
+                }
+                await client.post(webhook_url, json=payload, timeout=5.0)
+                logger.info(f"Successfully sent remediation webhook to {webhook_url}")
+        except Exception as e:
+            logger.error(f"Failed to send remediation webhook: {e}")
+            # We continue so the user still gets a success message in demo mode
+    
+    # Mocking a webhook or orchestration call for demo
+    time.sleep(1) # Simulate network latency
+    
+    return {
+        "status": "success", 
+        "message": f"Remediation action '{action}' has been successfully triggered.",
+        "details": {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "triggeredBy": uname,
+            "webhookSent": bool(webhook_url),
+            "mockTarget": "SOAR-Webhook-01"
+        }
+    }

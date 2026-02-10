@@ -1,6 +1,7 @@
 import os
+import json
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -14,8 +15,8 @@ logger = logging.getLogger(__name__)
 import elastic_connector
 import schema_extractor
 from routes import auth, stats, chat, misc
-from fastapi import Request, HTTPException
-from fastapi.responses import JSONResponse
+import asyncio
+from fastapi.responses import JSONResponse, StreamingResponse
 
 app = FastAPI(title="SIEM Conversational Agent API")
 
@@ -89,6 +90,83 @@ def schema(index: str):
     for k, v in props.items():
         fields.append({"name": k, "type": v})
     return {"index": index, "fields": fields}
+
+# SSE for real-time alerts
+@app.get("/api/alerts/stream")
+async def stream_alerts(request: Request, index: str = "wazuh-alerts-*", min_level: int = 10):
+    async def event_generator():
+        last_timestamp = None
+        while True:
+            # Check if client closed connection
+            if await request.is_disconnected():
+                break
+
+            try:
+                # Query for the latest alert
+                query = {
+                    "size": 1,
+                    "query": {
+                        "bool": {
+                            "must": [
+                                {"range": {"rule.level": {"gte": min_level}}},
+                                {"range": {"@timestamp": {"gte": "now-1m"}}}
+                            ]
+                        }
+                    },
+                    "sort": [{"@timestamp": {"order": "desc"}}]
+                }
+                
+                res = elastic_connector.execute_query(json.dumps(query), index_pattern=index)
+                if res.get("status") == "success" and res.get("data"):
+                    hit = res["data"][0]
+                    source = hit.get("_source", {})
+                    current_ts = source.get("@timestamp")
+                    
+                    if current_ts != last_timestamp:
+                        alert = {
+                            "id": hit.get("_id"),
+                            "timestamp": current_ts,
+                            "description": source.get("rule", {}).get("description", "No description"),
+                            "level": source.get("rule", {}).get("level", 0),
+                            "agent": source.get("agent", {}).get("name", "unknown")
+                        }
+                        yield f"data: {json.dumps(alert)}\n\n"
+                        last_timestamp = current_ts
+            except Exception as e:
+                logger.error(f"SSE Error: {e}")
+            
+            await asyncio.sleep(5) # Poll every 5s instead of 30s, but it's pushed to client
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# SSE for raw log stream
+@app.get("/api/logs/stream")
+async def stream_logs(request: Request, index: str = "wazuh-alerts-*"):
+    async def log_generator():
+        last_timestamp = None
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                query = {
+                    "size": 5,
+                    "query": {"range": {"@timestamp": {"gte": "now-1m"}}},
+                    "sort": [{"@timestamp": {"order": "desc"}}]
+                }
+                res = elastic_connector.execute_query(json.dumps(query), index_pattern=index)
+                if res.get("status") == "success" and res.get("data"):
+                    # Reverse to show oldest first in this batch
+                    for hit in reversed(res["data"]):
+                        source = hit.get("_source", {})
+                        ts = source.get("@timestamp")
+                        if last_timestamp is None or ts > last_timestamp:
+                            log_line = f"[{ts}] {source.get('agent', {}).get('name', 'unknown')} -> {source.get('rule', {}).get('description', 'No description')}"
+                            yield f"data: {json.dumps({'line': log_line, 'id': hit.get('_id')})}\n\n"
+                            last_timestamp = ts
+            except Exception as e:
+                logger.error(f"Log Stream Error: {e}")
+            await asyncio.sleep(2)
+    return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 # Note: Audit and Saved Search routes can be added here or moved to separate files
 # For now, keeping them simple in api_server.py or moving them to routes if needed.

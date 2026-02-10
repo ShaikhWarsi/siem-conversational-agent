@@ -7,6 +7,7 @@ import { ChatSidebar } from '@/components/chat-sidebar';
 import { ChatMessages } from '@/components/chat-messages';
 import { ChatInput } from '@/components/chat-input';
 import { ChatResponseTabs } from '@/components/chat-response-tabs';
+import { LogLiveStream } from '@/components/log-live-stream';
 import { apiClient } from '@/lib/api-client';
 import { useAppStore } from '@/lib/store';
 import type { ChatResponse } from '@/lib/types';
@@ -86,9 +87,16 @@ export default function ChatPage() {
         <ChatSidebar allowedIndices={allowedIndices} />
 
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Messages Area */}
-          <div className="flex-1 overflow-hidden border-b border-slate-700 p-6">
-            <ChatMessages messages={messages} />
+          <div className="flex flex-1 overflow-hidden">
+            {/* Messages Area */}
+            <div className="flex-1 overflow-hidden border-b border-slate-700 p-6">
+              <ChatMessages messages={messages} />
+            </div>
+
+            {/* Right Sidebar for Live Logs */}
+            <div className="w-80 border-l border-slate-700 bg-slate-950/50 p-4 hidden xl:block">
+              <LogLiveStream index={selectedIndex} />
+            </div>
           </div>
 
           {/* Response Tabs */}

@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { AlertCircle, ShieldAlert, Zap } from 'lucide-react';
+import { AlertCircle, ShieldAlert, Zap, BellRing } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import { useAppStore } from '@/lib/store';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 
 interface Alert {
   id: string;
@@ -18,43 +19,70 @@ interface Alert {
 
 export function ProactiveAlerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [lastAlertId, setLastAlertId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const selectedIndex = useAppStore((state) => state.selectedIndex);
   const user = useAppStore((state) => state.user);
   const router = useRouter();
 
   useEffect(() => {
-    const fetchAlerts = async () => {
+    // Initial fetch for historical context
+    const fetchInitialAlerts = async () => {
       setIsLoading(true);
       try {
-        // Query for level > 12 alerts (Critical in Wazuh)
-        const query = {
-          size: 5,
-          query: {
-            bool: {
-              must: [
-                { range: { "rule.level": { gte: 12 } } },
-                { range: { "@timestamp": { gte: "now-24h" } } }
-              ]
-            }
-          },
-          sort: [{ "@timestamp": { order: "desc" } }]
-        };
-        
-        // We use the chat endpoint but pass a direct DSL if the backend supports it, 
-        // or just use a dedicated endpoint. For now, let's assume we can use a 'shout' endpoint we'll create.
         const res = await apiClient.getRecentAlerts(selectedIndex, 12, user?.accessToken);
         setAlerts(res || []);
+        if (res && res.length > 0) {
+          setLastAlertId(res[0].id);
+        }
       } catch (err) {
-        console.error('Failed to fetch proactive alerts:', err);
+        console.error('Failed to fetch initial alerts:', err);
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchAlerts();
-    const interval = setInterval(fetchAlerts, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
+    fetchInitialAlerts();
+
+    // Setup SSE for real-time updates
+    const streamUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/alerts/stream?index=${selectedIndex}`;
+    const eventSource = new EventSource(streamUrl);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const newAlert = JSON.parse(event.data);
+        
+        setAlerts(prev => {
+          // Check if alert already exists to avoid duplicates
+          if (prev.find(a => a.id === newAlert.id)) return prev;
+          
+          const updated = [newAlert, ...prev].slice(0, 12);
+          
+          // Toast for new alert
+          toast.error(`NEW Critical Threat: ${newAlert.description}`, {
+            description: `Detected on ${newAlert.agent} at ${new Date(newAlert.timestamp).toLocaleTimeString()}`,
+            icon: <BellRing className="h-4 w-4" />,
+            action: {
+              label: 'Analyze',
+              onClick: () => router.push(`/chat?q=analyze alert ${newAlert.id}`),
+            },
+          });
+          
+          return updated;
+        });
+      } catch (err) {
+        console.error('Error parsing SSE event:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('SSE connection error:', err);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+    };
   }, [selectedIndex, user?.accessToken]);
 
   if (alerts.length === 0 && !isLoading) return null;
@@ -75,9 +103,9 @@ export function ProactiveAlerts() {
         {isLoading && alerts.length === 0 ? (
           <div className="py-4 text-center text-slate-500">Scanning for threats...</div>
         ) : (
-          alerts.map((alert) => (
+          alerts.map((alert, idx) => (
             <div 
-              key={alert.id}
+              key={alert.id || `alert-${idx}`}
               onClick={() => router.push(`/chat?q=analyze alert ${alert.id}`)}
               className="group flex cursor-pointer items-start gap-4 rounded-lg border border-slate-800 bg-slate-900/50 p-3 transition-colors hover:border-red-500/50 hover:bg-red-500/5"
             >

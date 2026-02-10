@@ -61,8 +61,8 @@ export function RiskScoring() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.map((entry) => (
-              <TableRow key={entry.entity} className="border-slate-800 hover:bg-slate-800/30">
+            {data.map((entry, idx) => (
+              <TableRow key={`${entry.entity}-${idx}`} className="border-slate-800 hover:bg-slate-800/30">
                 <TableCell className="font-medium text-slate-200">{entry.entity}</TableCell>
                 <TableCell className="text-right">
                   <Badge 

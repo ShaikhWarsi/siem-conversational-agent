@@ -68,7 +68,7 @@ def get_mock_data(size=5):
         })
     return mock_alerts
 
-def execute_query(query_dsl, index_pattern="wazuh-alerts-*", size_limit=100):
+def execute_query(query_dsl, index_pattern="wazuh-alerts-*", size_limit=1000):
     """
     Executes a raw DSL query against Elasticsearch.
     """
